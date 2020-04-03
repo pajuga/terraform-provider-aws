@@ -256,7 +256,7 @@ func TestAccAWSInstance_basic(t *testing.T) {
 		Providers:     testAccProviders,
 		CheckDestroy:  testAccCheckInstanceDestroy,
 		Steps: []resource.TestStep{
-			// Create a volume to cover #1249
+			// Create a volume to cover https://github.com/hashicorp/terraform/issues/1249
 			{
 				// Need a resource in this config so the provisioner will be available
 				Config: testAccInstanceConfig_pre(rInt),
@@ -276,6 +276,7 @@ func TestAccAWSInstance_basic(t *testing.T) {
 					testAccCheckInstanceExists(resourceName, &v),
 					testCheck(rInt),
 					resource.TestCheckResourceAttr(resourceName, "user_data", "3dc39dda39be1205215e776bad998da361a5955d"),
+					resource.TestCheckResourceAttr(resourceName, "root_block_device.#", "0"), // This is an instance store AMI
 					resource.TestCheckResourceAttr(resourceName, "ebs_block_device.#", "0"),
 					resource.TestMatchResourceAttr(resourceName, "arn", regexp.MustCompile(`^arn:[^:]+:ec2:[^:]+:\d{12}:instance/i-.+`)),
 				),
@@ -305,6 +306,51 @@ func TestAccAWSInstance_basic(t *testing.T) {
 					_, err := conn.DeleteVolume(&ec2.DeleteVolumeInput{VolumeId: vol.VolumeId})
 					return err
 				},
+			},
+		},
+	})
+}
+
+func TestAccAWSInstance_EbsRootDevice_basic(t *testing.T) {
+	var instance ec2.Instance
+	resourceName := "aws_instance.test"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckInstanceDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: `
+				data "aws_ami" "ami" {
+					owners      = ["amazon"]
+					most_recent = true
+
+					filter {
+						name   = "name"
+						values = ["amzn2-ami-*"]
+					}
+					filter {
+						name   = "root-device-type"
+						values = ["ebs"]
+					}
+				}
+
+				resource "aws_instance" "test" {
+					ami = data.aws_ami.ami.id
+
+					instance_type = "c3.large"
+				}`,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckInstanceExists(resourceName, &instance),
+					resource.TestCheckResourceAttr(resourceName, "root_block_device.#", "1"),
+					resource.TestCheckResourceAttrSet(resourceName, "root_block_device.0.delete_on_termination"),
+					resource.TestCheckResourceAttrSet(resourceName, "root_block_device.0.encrypted"),
+					resource.TestCheckResourceAttrSet(resourceName, "root_block_device.0.iops"),
+					resource.TestCheckResourceAttrSet(resourceName, "root_block_device.0.volume_size"),
+					resource.TestCheckResourceAttrSet(resourceName, "root_block_device.0.volume_type"),
+					resource.TestCheckResourceAttrSet(resourceName, "root_block_device.0.volume_id"),
+				),
 			},
 		},
 	})
